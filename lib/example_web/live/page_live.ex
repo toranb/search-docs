@@ -9,8 +9,9 @@ defmodule ExampleWeb.PageLive do
     documents = Example.Document |> Repo.all() |> Repo.preload(:sections)
 
     socket =
-      socket |> assign( task: nil, encoder: nil, lookup: nil, filename: nil, messages: messages, documents: documents, result: nil, text: nil, loading: false, selected: nil, query: nil, transformer: nil, llama: nil, path: nil, focused: false, loadingpdf: false)
-      |> allow_upload(:document, accept: ~w(.pdf), progress: &handle_progress/3, auto_upload: true, max_file_size: 50_000_000, max_entries: 1)
+      socket
+      |> assign(task: nil, encoder: nil, lookup: nil, filename: nil, messages: messages, documents: documents, result: nil, text: nil, loading: false, selected: nil, query: nil, markdown: nil, transformer: nil, llama: nil, path: nil, focused: false, loadingpdf: false)
+      |> allow_upload(:document, accept: ~w(.pdf .md), progress: &handle_progress/3, auto_upload: true, max_file_size: 100_000_000, max_entries: 1)
 
     {:ok, socket}
   end
@@ -56,17 +57,16 @@ defmodule ExampleWeb.PageLive do
 
     lookup =
       Task.async(fn ->
-        {selected, question, Nx.Serving.batched_run(SentenceTransformer, question)}
+        # {selected, question, Nx.Serving.batched_run(SentenceTransformer, question)}
+        {selected, question, question}
       end)
 
     {:noreply, assign(socket, lookup: lookup, loading: true, text: nil)}
   end
 
   @impl true
-  def handle_info({ref, {selected, question, %{embedding: embedding}}}, socket) when socket.assigns.lookup.ref == ref do
-    emb_results = Example.Section.search_document_embedding(selected.id, embedding)
-    bm25_results = Example.Section.search_keywords(selected.id, question)
-    results = Example.Rank.rank_results(bm25_results, emb_results, :reciprocal_rank)
+  def handle_info({ref, {selected, question, _}}, socket) when socket.assigns.lookup.ref == ref do
+    results = Example.Section.search_keywords(selected.id, question)
 
     search_results =
       results
@@ -102,7 +102,8 @@ defmodule ExampleWeb.PageLive do
           }
         ] ++ sections
 
-    {:noreply, assign(socket, lookup: nil, encoder: encoder, messages: new_messages)}
+    # {:noreply, assign(socket, lookup: nil, encoder: encoder)}
+    {:noreply, assign(socket, lookup: nil, loading: false, messages: new_messages)}
   end
 
   @impl true
@@ -128,7 +129,8 @@ defmodule ExampleWeb.PageLive do
   end
 
   @impl true
-  def handle_info({ref, {question, page, document_id, %{results: [%{text: text}]}}}, socket) when socket.assigns.llama.ref == ref do
+  def handle_info({ref, {question, page, document_id, %{results: [%{text: text}]}}}, socket)
+      when socket.assigns.llama.ref == ref do
     messages = socket.assigns.messages
 
     new_messages =
@@ -185,6 +187,49 @@ defmodule ExampleWeb.PageLive do
   end
 
   @impl true
+  def handle_info({ref, {result, %{embedding: embedding}}}, socket)
+      when socket.assigns.markdown.ref == ref do
+    %{title: title, text: text, inserted_at: inserted_at} = result
+
+    filename = socket.assigns.filename
+
+    document =
+      %Example.Document{}
+      |> Example.Document.changeset(%{
+        title: filename,
+        category: "documentation",
+        inserted_at: inserted_at
+      })
+      |> Repo.insert!()
+
+    %Example.Section{}
+    |> Example.Section.changeset(%{
+      filepath: filename,
+      page: 1,
+      text: text,
+      document_id: document.id,
+      embedding: embedding
+    })
+    |> Repo.insert!()
+
+    documents = Example.Document |> Repo.all() |> Repo.preload(:sections)
+
+    send(self(), {:index_documents, filename})
+
+    socket =
+      socket
+      |> assign(
+        documents: documents,
+        selected: document,
+        loadingpdf: false,
+        markdown: nil,
+        filename: nil
+      )
+
+    {:noreply, socket}
+  end
+
+  @impl true
   def handle_info({ref, {directory, {"", 0}}}, socket) when socket.assigns.query.ref == ref do
     task =
       document_embeddings(directory, fn text, filepath, embedding ->
@@ -200,7 +245,8 @@ defmodule ExampleWeb.PageLive do
   end
 
   @impl true
-  def handle_info({ref, {section, %{embedding: embedding}}}, socket) when socket.assigns.transformer.ref == ref do
+  def handle_info({ref, {section, %{embedding: embedding}}}, socket)
+      when socket.assigns.transformer.ref == ref do
     Example.Section
     |> Repo.get!(section.id)
     |> Example.Section.changeset(%{embedding: embedding})
@@ -214,7 +260,7 @@ defmodule ExampleWeb.PageLive do
 
   @impl true
   def handle_info({:index_documents, _filename}, socket) do
-    Example.Section.index_sections()
+    Example.Section.reindex_sections()
     IO.inspect("index documents complete")
 
     {:noreply, socket}
@@ -226,18 +272,15 @@ defmodule ExampleWeb.PageLive do
   end
 
   def handle_progress(:document, %{client_name: filename} = entry, socket) when entry.done? do
-    path =
-      consume_uploaded_entries(socket, :document, fn %{path: path}, _entry ->
-        dest = Path.join(["priv", "static", "uploads", Path.basename("#{path}/#{filename}")])
-        File.cp!(path, dest)
-        {:ok, dest}
-      end)
-      |> List.first()
+    if Path.extname(filename) |> String.downcase() == ".md" do
+      handle_markdown(filename, socket)
+    else
+      handle_pdf(filename, socket)
+    end
+  end
 
-    id = :rand.uniform(1000)
-    pdfdir = Application.fetch_env!(:example, :pdf_path)
-    directory = Path.join(pdfdir, "/#{id}")
-    File.mkdir_p!(directory)
+  def handle_pdf(filename, socket) do
+    {path, directory} = parse_document(filename, socket)
 
     query =
       Task.async(fn ->
@@ -245,6 +288,30 @@ defmodule ExampleWeb.PageLive do
       end)
 
     {:noreply, assign(socket, path: path, query: query, filename: filename, loadingpdf: true)}
+  end
+
+  def handle_markdown(filename, socket) do
+    {path, directory} = parse_document(filename, socket)
+
+    markdown =
+      Task.async(fn ->
+        case File.read(path) do
+          {:ok, content} ->
+            case parse_md_content(content) do
+              %{text: text} = result ->
+                {result, Nx.Serving.batched_run(SentenceTransformer, text)}
+
+              _ ->
+                {:error, "failed to parse markdown"}
+            end
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+      end)
+
+    {:noreply,
+     assign(socket, path: path, markdown: markdown, filename: filename, loadingpdf: true)}
   end
 
   def handle_progress(_name, _entry, socket), do: {:noreply, socket}
@@ -260,15 +327,15 @@ defmodule ExampleWeb.PageLive do
               {"", filepath, %{embedding: []}}
 
             {content, 0} ->
-              IO.inspect(content)
-
               cond do
                 is_bitstring(content) and String.length(content) > 10 ->
                   text = content |> String.replace(~r/ {3,}/, "   ")
-                  {text, filepath, Nx.Serving.batched_run(SentenceTransformer, text)}
+                  # {text, filepath, Nx.Serving.batched_run(SentenceTransformer, text)}
+                  {text, filepath, %{embedding: []}}
 
                 true ->
                   raise "not enough text"
+                  {"", filepath, %{embedding: []}}
               end
 
             _ ->
@@ -285,6 +352,39 @@ defmodule ExampleWeb.PageLive do
   end
 
   def results(%{results: results}), do: results
+
+  def parse_md_content(content) do
+    lines = String.split(content, "\n", trim: true)
+
+    case lines do
+      ["##" <> title, date | text_lines] ->
+        %{
+          title: String.trim(title),
+          inserted_at: String.trim(date),
+          text: Enum.join(text_lines, "\n")
+        }
+
+      _ ->
+        {:error, "Invalid format"}
+    end
+  end
+
+  def parse_document(filename, socket) do
+    path =
+      consume_uploaded_entries(socket, :document, fn %{path: path}, _entry ->
+        dest = Path.join(["priv", "static", "uploads", Path.basename("#{path}/#{filename}")])
+        File.cp!(path, dest)
+        {:ok, dest}
+      end)
+      |> List.first()
+
+    id = :rand.uniform(1000)
+    pdfdir = Application.fetch_env!(:example, :pdf_path)
+    directory = Path.join(pdfdir, "/#{id}")
+    File.mkdir_p!(directory)
+
+    {path, directory}
+  end
 
   @impl true
   def render(assigns) do

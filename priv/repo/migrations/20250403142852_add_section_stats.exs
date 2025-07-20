@@ -3,21 +3,21 @@ defmodule Example.Repo.Migrations.AddSectionStats do
 
   def up do
     execute """
-    CREATE TEXT SEARCH DICTIONARY english_stem (TEMPLATE = snowball, LANGUAGE = english);
+    CREATE TEXT SEARCH DICTIONARY public.english_stem (TEMPLATE = snowball, LANGUAGE = english);
     """
 
     execute """
-    CREATE TEXT SEARCH DICTIONARY simple_dict (TEMPLATE = pg_catalog.simple, STOPWORDS = english);
+    CREATE TEXT SEARCH DICTIONARY public.simple_dict (TEMPLATE = pg_catalog.simple, STOPWORDS = english);
     """
 
     execute """
-    CREATE TEXT SEARCH CONFIGURATION simple_conf (PARSER = 'default');
+    CREATE TEXT SEARCH CONFIGURATION public.simple_conf (PARSER = 'default');
     """
 
     execute """
-    ALTER TEXT SEARCH CONFIGURATION simple_conf
+    ALTER TEXT SEARCH CONFIGURATION public.simple_conf
     ALTER MAPPING FOR asciiword, word, numword, asciihword, hword, numhword
-    WITH english_stem, simple_dict;
+    WITH public.english_stem, public.simple_dict;
     """
 
     execute """
