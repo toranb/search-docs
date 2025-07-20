@@ -23,16 +23,7 @@ defmodule Example.Repo.Migrations.AddSectionStats do
     execute """
     CREATE OR REPLACE FUNCTION tokenize_and_count(input_text TEXT)
     RETURNS TABLE (term TEXT, count INTEGER) AS $$
-    DECLARE
-        debug_tokens TEXT[];
     BEGIN
-        SELECT array_agg(word ORDER BY word)
-        INTO debug_tokens
-        FROM ts_parse('default', lower(input_text)) AS t(tokid, word)
-        WHERE tokid != 12;  -- omit space token id
-
-        RAISE NOTICE 'Basic tokens: %', debug_tokens;
-
         -- Get stemmed tokens with stop words removed
         RETURN QUERY
         WITH tokens AS (
@@ -75,7 +66,6 @@ defmodule Example.Repo.Migrations.AddSectionStats do
     """
 
     execute """
-    -- Function to calculate BM25 score for a single term
     CREATE OR REPLACE FUNCTION bm25_term_score(
         tf INTEGER,           -- term frequency in document
         doc_length INTEGER,   -- length of document
@@ -99,9 +89,6 @@ defmodule Example.Repo.Migrations.AddSectionStats do
         -- BM25 term score formula
         numerator := tf * (k1 + 1);
         denominator := tf + k1 * (1 - b + b * normalized_length);
-
-        RAISE NOTICE 'Term score debug - tf: %, doc_length: %, idf: %, avg_length: %, normalized_length: %, numerator: %, denominator: %',
-                     tf, doc_length, idf, avg_length, normalized_length, numerator, denominator;
 
         RETURN idf * (numerator / denominator);
     END;
@@ -266,14 +253,12 @@ defmodule Example.Repo.Migrations.AddSectionStats do
     """
 
     execute """
-    -- Function to search documents using BM25
-    -- CREATE OR REPLACE FUNCTION search_sections_bm25(
     CREATE OR REPLACE FUNCTION search_sections(
         query_text TEXT,
         k1 FLOAT DEFAULT 1.2,
         b FLOAT DEFAULT 0.75,
         limit_val INTEGER DEFAULT 10,
-        similarity_threshold FLOAT DEFAULT 0.3 -- New parameter for typo tolerance
+        similarity_threshold FLOAT DEFAULT 0.3
     ) RETURNS TABLE (
         section_id BIGINT,
         score FLOAT,
@@ -288,8 +273,6 @@ defmodule Example.Repo.Migrations.AddSectionStats do
         SELECT gs.total_docs, gs.avg_length
         INTO v_total_docs, v_avg_length
         FROM global_stats gs;
-
-        RAISE NOTICE 'Global stats - total_docs: %, avg_length: %', v_total_docs, v_avg_length;
 
         RETURN QUERY
         WITH raw_query_terms AS (
@@ -369,7 +352,6 @@ defmodule Example.Repo.Migrations.AddSectionStats do
         ORDER BY
             score DESC
         LIMIT limit_val;
-
     END;
     $$ LANGUAGE plpgsql;
     """
@@ -403,9 +385,8 @@ defmodule Example.Repo.Migrations.AddSectionStats do
             ORDER BY id
         ) AS indexed_sections;
 
+        -- Refresh the materialized view
         REFRESH MATERIALIZED VIEW CONCURRENTLY global_stats;
-
-        RAISE NOTICE 'Indexed % sections and refreshed global_stats', indexed_count;
 
         RETURN indexed_count;
     END;
@@ -433,9 +414,6 @@ defmodule Example.Repo.Migrations.AddSectionStats do
 
         -- Refresh the materialized view
         REFRESH MATERIALIZED VIEW CONCURRENTLY global_stats;
-
-        -- Log and return the count
-        RAISE NOTICE 'Updated % modified sections and refreshed global_stats', updated_count;
 
         RETURN updated_count;
     END;
