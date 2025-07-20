@@ -10,7 +10,6 @@ defmodule Example.Application do
     children = [
       ExampleWeb.Telemetry,
       {Nx.Serving, serving: llama(), name: ChatServing},
-      {Nx.Serving, serving: cross(), name: CrossEncoder},
       {Nx.Serving, serving: serving(), name: SentenceTransformer},
       Example.Repo,
       {DNSCluster, query: Application.get_env(:example, :dns_cluster_query) || :ignore},

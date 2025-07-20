@@ -31,28 +31,48 @@ defmodule Example.Section do
     from(s in Section,
       select: {s.id, s.page, s.text, s.document_id},
       where: s.document_id == ^document_id,
-      order_by: max_inner_product(s.embedding, ^embedding),
-      limit: 4
+      order_by: cosine_distance(s.embedding, ^embedding),
+      limit: 5
     )
     |> Example.Repo.all()
   end
 
-  def search_document_text(document_id, search) do
-    from(s in Section,
-      select: {s.id, s.page, s.text, s.document_id},
-      where:
-        s.document_id == ^document_id and
-          fragment("to_tsvector('english', ?) @@ plainto_tsquery('english', ?)", s.text, ^search),
-      order_by: [
-        desc:
-          fragment(
-            "ts_rank_cd(to_tsvector('english', ?), plainto_tsquery('english', ?))",
-            s.text,
-            ^search
-          )
-      ],
-      limit: 4
-    )
-    |> Example.Repo.all()
+  def search_keywords(_document_id, term) do
+    sql = """
+    SELECT
+      bm.score,
+      bm.section_id,
+      s.page,
+      bm.content as text,
+      s.document_id
+    FROM search_sections($1) bm
+    INNER JOIN section_stats d ON d.section_id = bm.section_id
+    INNER JOIN sections s ON s.id = bm.section_id
+    ORDER BY bm.score DESC;
+    """
+
+    case Ecto.Adapters.SQL.query(Example.Repo, sql, [term]) do
+      {:ok, %{rows: rows}} ->
+        Enum.map(rows, fn [score, section_id, page, text, document_id] ->
+          {score, {section_id, page, text, document_id}}
+        end)
+
+      {:error, _error} ->
+        []
+    end
+  end
+
+  def index_sections() do
+    sql = """
+    SELECT FROM index_all_sections()
+    """
+    Ecto.Adapters.SQL.query(Example.Repo, sql, [])
+  end
+
+  def reindex_sections() do
+    sql = """
+    SELECT FROM bulk_update_modified_sections()
+    """
+    Ecto.Adapters.SQL.query(Example.Repo, sql, [])
   end
 end
