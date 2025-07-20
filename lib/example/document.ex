@@ -13,10 +13,11 @@ defmodule Example.Document do
   end
 
   @required_attrs [:title, :category]
+  @optional_attrs [:inserted_at]
 
   def changeset(document, params \\ %{}) do
     document
-    |> cast(params, @required_attrs)
+    |> cast(params, @required_attrs ++ @optional_attrs)
     |> validate_required(@required_attrs)
   end
 end
