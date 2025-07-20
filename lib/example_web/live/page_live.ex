@@ -336,14 +336,38 @@ defmodule ExampleWeb.PageLive do
                       <%= for message <- Enum.filter(@messages, fn m -> m.document_id == @selected.id end) do %>
                         <div
                           :if={message.user_id != 1}
-                          class="my-2 flex flex-row justify-start space-x-1 self-start items-start"
+                          class="relative rounded-lg bg-gray-200 my-2 flex flex-row justify-start space-x-1 self-start items-start relative"
                         >
-                          <div class="flex flex-col space-y-0.5 self-start items-start">
-                            <div class="bg-gray-200 text-gray-900 ml-0 mr-12 py-2 px-3 inline-flex text-sm rounded-lg whitespace-pre-wrap">
-                              {message.text}
-                            </div>
-                            <div class="mx-1 text-xs text-gray-500">
-                              {Calendar.strftime(message.inserted_at, "%B %d, %-I:%M %p")}
+                          <button
+                            type="button"
+                            aria-label="Toggle content"
+                            class="absolute top-2 right-2 flex h-8 w-8 items-center justify-center rounded-full text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-700 focus:outline-none z-10"
+                            phx-click={
+                                    JS.toggle_class("max-h-[200px]", to: "#collapsible-content-#{message.id}")
+                                    |> JS.toggle_class("h-auto", to: "#collapsible-content-#{message.id}")
+                                    |> JS.toggle_class("rotate-180", to: "#collapsible-arrow-#{message.id}")
+                                  }
+                          >
+                            <span class="sr-only">Expand or collapse content</span>
+                            <svg
+                              id={"collapsible-arrow-#{message.id}"}
+                              class="h-6 w-6 transition-transform duration-300"
+                              xmlns="http://www.w3.org/2000/svg"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                              stroke-width="1.5"
+                              stroke="currentColor"
+                            >
+                              <path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+                            </svg>
+                          </button>
+
+                          <div
+                            id={"collapsible-content-#{message.id}"}
+                            class="flex flex-col space-y-0.5 self-start items-start overflow-hidden max-h-[200px] transition-[max-height] duration-500 ease-in-out"
+                          >
+                            <div class="text-gray-900 ml-0 mr-12 py-1 px-2 inline-flex text-sm whitespace-pre-wrap">
+                              <%= message.text %>
                             </div>
                           </div>
                         </div>
@@ -352,11 +376,8 @@ defmodule ExampleWeb.PageLive do
                           class="my-2 flex flex-row justify-start space-x-1 self-end items-end"
                         >
                           <div class="flex flex-col space-y-0.5 self-end items-end">
-                            <div class="bg-purple-600 text-gray-50 ml-12 mr-0 py-2 px-3 inline-flex text-sm rounded-lg whitespace-pre-wrap">
+                            <div class="bg-purple-600 text-gray-50 ml-12 mr-0 py-1 px-2 inline-flex text-sm rounded-lg whitespace-pre-wrap">
                               {message.text}
-                            </div>
-                            <div class="mx-1 text-xs text-gray-500">
-                              {Calendar.strftime(message.inserted_at, "%B %d, %-I:%M %p")}
                             </div>
                           </div>
                         </div>
