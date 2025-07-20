@@ -375,7 +375,11 @@ defmodule Example.Repo.Migrations.AddSectionStats do
     """
 
     execute """
-    CREATE MATERIALIZED VIEW global_stats AS SELECT COUNT(*) as total_docs, AVG(length) as avg_length FROM section_stats;
+    CREATE MATERIALIZED VIEW global_stats AS SELECT COUNT(*) as total_docs, AVG(length) as avg_length, 1 AS pkey FROM section_stats;
+    """
+
+    execute """
+    CREATE UNIQUE INDEX idx_global_stats_pkey ON global_stats(pkey);
     """
 
     execute """
@@ -399,7 +403,7 @@ defmodule Example.Repo.Migrations.AddSectionStats do
             ORDER BY id
         ) AS indexed_sections;
 
-        REFRESH MATERIALIZED VIEW global_stats;
+        REFRESH MATERIALIZED VIEW CONCURRENTLY global_stats;
 
         RAISE NOTICE 'Indexed % sections and refreshed global_stats', indexed_count;
 
@@ -428,7 +432,7 @@ defmodule Example.Repo.Migrations.AddSectionStats do
         ) AS updated_sections;
 
         -- Refresh the materialized view
-        REFRESH MATERIALIZED VIEW global_stats;
+        REFRESH MATERIALIZED VIEW CONCURRENTLY global_stats;
 
         -- Log and return the count
         RAISE NOTICE 'Updated % modified sections and refreshed global_stats', updated_count;
