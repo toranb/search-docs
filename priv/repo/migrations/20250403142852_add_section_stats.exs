@@ -54,7 +54,6 @@ defmodule Example.Repo.Migrations.AddSectionStats do
     """
 
     execute """
-    -- Function to calculate IDF with debugging
     CREATE OR REPLACE FUNCTION calculate_idf(term_doc_count INTEGER, total_docs INTEGER)
     RETURNS FLOAT AS $$
     BEGIN
@@ -69,7 +68,7 @@ defmodule Example.Repo.Migrations.AddSectionStats do
     CREATE OR REPLACE FUNCTION bm25_term_score(
         tf INTEGER,           -- term frequency in document
         doc_length INTEGER,   -- length of document
-        idf FLOAT,           -- inverse document frequency
+        idf FLOAT,            -- inverse document frequency
         avg_length FLOAT,     -- average document length
         k1 FLOAT DEFAULT 1.2,
         b FLOAT DEFAULT 0.75
@@ -79,14 +78,12 @@ defmodule Example.Repo.Migrations.AddSectionStats do
         denominator FLOAT;
         normalized_length FLOAT;
     BEGIN
-        -- Handle edge cases
         IF tf IS NULL OR tf = 0 THEN
             RETURN 0.0;
         END IF;
 
         normalized_length := doc_length/avg_length;
 
-        -- BM25 term score formula
         numerator := tf * (k1 + 1);
         denominator := tf + k1 * (1 - b + b * normalized_length);
 
@@ -96,7 +93,6 @@ defmodule Example.Repo.Migrations.AddSectionStats do
     """
 
     execute """
-    -- Create term statistics table
     CREATE TABLE IF NOT EXISTS term_stats (
         term TEXT PRIMARY KEY,
         doc_count INTEGER NOT NULL,  -- n(qi)
@@ -105,24 +101,21 @@ defmodule Example.Repo.Migrations.AddSectionStats do
     """
 
     execute """
-    -- Create sections statistics table
     CREATE TABLE IF NOT EXISTS section_stats (
         section_id BIGINT PRIMARY KEY REFERENCES sections(id),
         length INTEGER NOT NULL,
-        terms JSONB NOT NULL,  -- stores term frequencies
+        terms JSONB NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
     """
 
     execute """
-    -- Function to index a document
     CREATE OR REPLACE FUNCTION index_document(section_id BIGINT, section_text TEXT)
     RETURNS BIGINT AS $$
     DECLARE
         doc_length INTEGER;
         term_counts JSONB;
     BEGIN
-        -- Calculate term frequencies
         WITH term_counts_cte AS (
             SELECT * FROM tokenize_and_count(section_text)
         )
@@ -132,22 +125,16 @@ defmodule Example.Repo.Migrations.AddSectionStats do
         INTO term_counts, doc_length
         FROM term_counts_cte;
 
-        -- Handle empty document case
         IF doc_length IS NULL THEN
             doc_length := 0;
             term_counts := '{}'::jsonb;
         END IF;
 
-        -- Update document stats
         INSERT INTO section_stats (section_id, length, terms)
         VALUES (section_id, doc_length, term_counts);
 
-        -- Update term stats
         INSERT INTO term_stats (term, doc_count, total_count)
-        SELECT
-            term,
-            1,
-            (term_counts->term)::integer
+        SELECT term, 1, (term_counts->term)::integer
         FROM jsonb_object_keys(term_counts) term
         ON CONFLICT (term) DO UPDATE SET
             doc_count = term_stats.doc_count + 1,
@@ -159,7 +146,6 @@ defmodule Example.Repo.Migrations.AddSectionStats do
     """
 
     execute """
-    -- Function to update index for an existing document
     CREATE OR REPLACE FUNCTION update_document_index(p_section_id BIGINT, new_section_text TEXT)
     RETURNS BIGINT AS $$
     DECLARE
@@ -167,7 +153,6 @@ defmodule Example.Repo.Migrations.AddSectionStats do
         new_doc_length INTEGER;
         new_term_counts JSONB;
     BEGIN
-        -- Get the existing terms for this section
         SELECT terms INTO old_terms
         FROM section_stats
         WHERE section_id = p_section_id;
@@ -187,13 +172,11 @@ defmodule Example.Repo.Migrations.AddSectionStats do
         INTO new_term_counts, new_doc_length
         FROM term_counts_cte;
 
-        -- Handle empty document case
         IF new_doc_length IS NULL THEN
             new_doc_length := 0;
             new_term_counts := '{}'::jsonb;
         END IF;
 
-        -- Update document stats
         UPDATE section_stats
         SET
             length = new_doc_length,
@@ -201,8 +184,6 @@ defmodule Example.Repo.Migrations.AddSectionStats do
             created_at = NOW()
         WHERE section_id = p_section_id;
 
-        -- Update term stats: remove old term counts
-        -- For terms that were in old document but not in new one
         WITH removed_terms AS (
             SELECT term, (old_terms->term)::integer as count
             FROM jsonb_object_keys(old_terms) term
@@ -234,17 +215,13 @@ defmodule Example.Repo.Migrations.AddSectionStats do
 
         -- For terms that are only in new document
         INSERT INTO term_stats (term, doc_count, total_count)
-        SELECT
-            term,
-            1,
-            (new_term_counts->term)::integer
+        SELECT term, 1, (new_term_counts->term)::integer
         FROM jsonb_object_keys(new_term_counts) term
         WHERE NOT old_terms ? term
         ON CONFLICT (term) DO UPDATE SET
             doc_count = term_stats.doc_count + 1,
             total_count = term_stats.total_count + (EXCLUDED.total_count);
 
-        -- Clean up terms that now have 0 documents
         DELETE FROM term_stats WHERE doc_count = 0;
 
         RETURN p_section_id;
@@ -262,48 +239,35 @@ defmodule Example.Repo.Migrations.AddSectionStats do
     ) RETURNS TABLE (
         section_id BIGINT,
         score FLOAT,
-        content TEXT,
-        debug_info JSONB
+        content TEXT
     ) AS $$
     DECLARE
         v_total_docs INTEGER;
         v_avg_length FLOAT;
     BEGIN
-        -- Get global stats (ensure global_stats view is refreshed)
         SELECT gs.total_docs, gs.avg_length
         INTO v_total_docs, v_avg_length
         FROM global_stats gs;
 
         RETURN QUERY
         WITH raw_query_terms AS (
-            -- Step 1: Tokenize the user's input query as before
             SELECT term
             FROM tokenize_and_count(query_text)
         ),
         query_terms AS (
-            -- Step 2: For each raw term, find the best-matching correctly spelled term
-            -- from our statistics table. This is the typo-correction step.
             SELECT DISTINCT corrected_term AS term
             FROM raw_query_terms rqt
             CROSS JOIN LATERAL (
-                -- Find the single most similar term that meets the threshold
                 SELECT ts.term AS corrected_term
                 FROM term_stats ts
                 WHERE similarity(rqt.term, ts.term) >= similarity_threshold
-                ORDER BY similarity(rqt.term, ts.term) DESC -- Order by similarity to get the best match
+                ORDER BY similarity(rqt.term, ts.term) DESC
                 LIMIT 1
             ) AS best_match
         ),
         term_scores AS (
-            -- This part of the query remains exactly the same as before!
-            -- It now operates on the corrected `query_terms`.
             SELECT
                 d.section_id,
-                t.term AS query_term,
-                (d.terms->>t.term)::INTEGER AS tf,
-                ts.doc_count,
-                ts.total_count,
-                calculate_idf(ts.doc_count, v_total_docs) AS idf,
                 bm25_term_score(
                     (d.terms->>t.term)::INTEGER,
                     d.length,
@@ -312,8 +276,6 @@ defmodule Example.Repo.Migrations.AddSectionStats do
                     k1,
                     b
                 ) AS term_score,
-                d.length AS doc_length,
-                d.terms AS doc_terms,
                 sect.text AS doc_text
             FROM
                 section_stats d
@@ -324,31 +286,15 @@ defmodule Example.Repo.Migrations.AddSectionStats do
             JOIN
                 term_stats ts ON ts.term = t.term
         )
-        -- This final aggregation also remains identical
         SELECT
             ts.section_id,
             SUM(ts.term_score) AS score,
-            ts.doc_text AS content,
-            jsonb_build_object(
-                'doc_length', ts.doc_length,
-                'doc_terms', ts.doc_terms,
-                'term_contributions', jsonb_agg(
-                    jsonb_build_object(
-                        'term', ts.query_term,
-                        'tf', ts.tf,
-                        'term_doc_count', ts.doc_count,
-                        'idf', ROUND(ts.idf::numeric, 5),
-                        'term_score', ROUND(ts.term_score::numeric, 5)
-                    ) ORDER BY ts.term_score DESC
-                )
-            ) AS debug_info
+            ts.doc_text AS content
         FROM
             term_scores ts
         GROUP BY
             ts.section_id,
-            ts.doc_text,
-            ts.doc_length,
-            ts.doc_terms
+            ts.doc_text
         ORDER BY
             score DESC
         LIMIT limit_val;
@@ -362,10 +308,6 @@ defmodule Example.Repo.Migrations.AddSectionStats do
 
     execute """
     CREATE UNIQUE INDEX idx_global_stats_pkey ON global_stats(pkey);
-    """
-
-    execute """
-    CREATE INDEX idx_term_stats_term ON term_stats(term);
     """
 
     execute """
@@ -385,7 +327,6 @@ defmodule Example.Repo.Migrations.AddSectionStats do
             ORDER BY id
         ) AS indexed_sections;
 
-        -- Refresh the materialized view
         REFRESH MATERIALIZED VIEW CONCURRENTLY global_stats;
 
         RETURN indexed_count;
@@ -394,14 +335,11 @@ defmodule Example.Repo.Migrations.AddSectionStats do
     """
 
     execute """
-    -- Update only sections that have been modified since last index update
     CREATE OR REPLACE FUNCTION bulk_update_modified_sections()
     RETURNS INTEGER AS $$
     DECLARE
         updated_count INTEGER := 0;
     BEGIN
-        -- This assumes you have some way to track when sections were last modified
-        -- You might need to add a modified_at column to your sections table
         SELECT COUNT(*) INTO updated_count
         FROM (
             SELECT update_document_index(s.id, s.text)
@@ -412,7 +350,6 @@ defmodule Example.Repo.Migrations.AddSectionStats do
             ORDER BY s.id
         ) AS updated_sections;
 
-        -- Refresh the materialized view
         REFRESH MATERIALIZED VIEW CONCURRENTLY global_stats;
 
         RETURN updated_count;
