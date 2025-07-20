@@ -272,7 +272,8 @@ defmodule Example.Repo.Migrations.AddSectionStats do
         query_text TEXT,
         k1 FLOAT DEFAULT 1.2,
         b FLOAT DEFAULT 0.75,
-        limit_val INTEGER DEFAULT 10
+        limit_val INTEGER DEFAULT 10,
+        similarity_threshold FLOAT DEFAULT 0.3 -- New parameter for typo tolerance
     ) RETURNS TABLE (
         section_id BIGINT,
         score FLOAT,
@@ -291,64 +292,76 @@ defmodule Example.Repo.Migrations.AddSectionStats do
         RAISE NOTICE 'Global stats - total_docs: %, avg_length: %', v_total_docs, v_avg_length;
 
         RETURN QUERY
-        WITH query_terms AS (
-            -- Tokenize the input query text
-            SELECT term, COUNT(*) as query_tf -- query_tf not used in BM25 score but good for debug
+        WITH raw_query_terms AS (
+            -- Step 1: Tokenize the user's input query as before
+            SELECT term
             FROM tokenize_and_count(query_text)
-            GROUP BY term
+        ),
+        query_terms AS (
+            -- Step 2: For each raw term, find the best-matching correctly spelled term
+            -- from our statistics table. This is the typo-correction step.
+            SELECT DISTINCT corrected_term AS term
+            FROM raw_query_terms rqt
+            CROSS JOIN LATERAL (
+                -- Find the single most similar term that meets the threshold
+                SELECT ts.term AS corrected_term
+                FROM term_stats ts
+                WHERE similarity(rqt.term, ts.term) >= similarity_threshold
+                ORDER BY similarity(rqt.term, ts.term) DESC -- Order by similarity to get the best match
+                LIMIT 1
+            ) AS best_match
         ),
         term_scores AS (
-            -- Calculate score for each matching query_term/document pair
+            -- This part of the query remains exactly the same as before!
+            -- It now operates on the corrected `query_terms`.
             SELECT
                 d.section_id,
                 t.term AS query_term,
-                (d.terms->>t.term)::INTEGER AS tf, -- Term frequency in this doc
-                ts.doc_count,                     -- # docs containing this term
-                ts.total_count,                   -- Total occurrences of this term
+                (d.terms->>t.term)::INTEGER AS tf,
+                ts.doc_count,
+                ts.total_count,
                 calculate_idf(ts.doc_count, v_total_docs) AS idf,
                 bm25_term_score(
-                    (d.terms->>t.term)::INTEGER, -- tf
-                    d.length,                   -- doc_length
-                    calculate_idf(ts.doc_count, v_total_docs), -- idf
-                    v_avg_length,               -- avg_length
-                    k1,                         -- k1 param
-                    b                           -- b param
-                ) AS term_score,                 -- BM25 score for this term in this doc
-                -- Pass document-level info needed for final aggregation
+                    (d.terms->>t.term)::INTEGER,
+                    d.length,
+                    calculate_idf(ts.doc_count, v_total_docs),
+                    v_avg_length,
+                    k1,
+                    b
+                ) AS term_score,
                 d.length AS doc_length,
-                d.terms AS doc_terms,           -- Full terms JSONB for the doc
+                d.terms AS doc_terms,
                 sect.text AS doc_text
             FROM
                 section_stats d
             JOIN
                 sections sect ON sect.id = d.section_id
             JOIN
-                query_terms t ON d.terms ? t.term -- IMPORTANT: Join only if doc contains query term
+                query_terms t ON d.terms ? t.term
             JOIN
-                term_stats ts ON ts.term = t.term  -- Get stats for the query term
+                term_stats ts ON ts.term = t.term
         )
-        -- Aggregate the term scores per document
+        -- This final aggregation also remains identical
         SELECT
             ts.section_id,
-            SUM(ts.term_score) AS score, -- Final aggregated BM25 score
-            ts.doc_text AS content,      -- Document text
+            SUM(ts.term_score) AS score,
+            ts.doc_text AS content,
             jsonb_build_object(
                 'doc_length', ts.doc_length,
-                'doc_terms', ts.doc_terms, -- Static list of all terms in doc
-                'term_contributions', jsonb_agg( -- Array of contributing query terms
+                'doc_terms', ts.doc_terms,
+                'term_contributions', jsonb_agg(
                     jsonb_build_object(
                         'term', ts.query_term,
                         'tf', ts.tf,
-                        'term_doc_count', ts.doc_count, -- Renamed for clarity vs total_docs
-                        'idf', ROUND(ts.idf::numeric, 5), -- Round for readability
-                        'term_score', ROUND(ts.term_score::numeric, 5) -- Round for readability
-                    ) ORDER BY ts.term_score DESC -- Order contributions by score
+                        'term_doc_count', ts.doc_count,
+                        'idf', ROUND(ts.idf::numeric, 5),
+                        'term_score', ROUND(ts.term_score::numeric, 5)
+                    ) ORDER BY ts.term_score DESC
                 )
             ) AS debug_info
         FROM
             term_scores ts
         GROUP BY
-            -- Group only by document-level attributes
             ts.section_id,
             ts.doc_text,
             ts.doc_length,
@@ -423,6 +436,11 @@ defmodule Example.Repo.Migrations.AddSectionStats do
         RETURN updated_count;
     END;
     $$ LANGUAGE plpgsql;
+    """
+
+    # trigram-based text search for typos
+    execute """
+    CREATE INDEX IF NOT EXISTS idx_term_stats_trgm ON term_stats USING gin (term gin_trgm_ops);
     """
   end
 
