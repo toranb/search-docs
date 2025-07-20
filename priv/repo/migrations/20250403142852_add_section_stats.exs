@@ -239,7 +239,8 @@ defmodule Example.Repo.Migrations.AddSectionStats do
     ) RETURNS TABLE (
         section_id BIGINT,
         score FLOAT,
-        highlighted_content TEXT
+        highlighted_content TEXT,
+        content TEXT
     ) AS $$
     DECLARE
         v_total_docs INTEGER;
@@ -265,7 +266,6 @@ defmodule Example.Repo.Migrations.AddSectionStats do
                 LIMIT 1
             ) AS best_match
         ),
-        -- Create a tsquery object for highlighting
         search_query AS (
             SELECT to_tsquery('simple', string_agg(term, ' | ')) as q
             FROM query_terms
@@ -294,13 +294,13 @@ defmodule Example.Repo.Migrations.AddSectionStats do
         SELECT
             ts.section_id,
             SUM(ts.term_score) AS score,
-            -- Use ts_headline to generate the highlighted content
             ts_headline(
                 'public.simple_conf',
                 ts.doc_text,
                 (SELECT q FROM search_query),
                 'StartSel=<mark>, StopSel=</mark>, MaxFragments=10, MinWords=5, MaxWords=10'
-            ) AS highlighted_content
+            ) AS highlighted_content,
+            ts.doc_text AS content
         FROM
             term_scores ts
         GROUP BY
