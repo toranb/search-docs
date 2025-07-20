@@ -366,8 +366,8 @@ defmodule ExampleWeb.PageLive do
                             id={"collapsible-content-#{message.id}"}
                             class="flex flex-col space-y-0.5 self-start items-start overflow-hidden max-h-[200px] transition-[max-height] duration-500 ease-in-out"
                           >
-                            <div class="text-gray-900 ml-0 mr-12 py-1 px-2 inline-flex text-sm whitespace-pre-wrap">
-                              <%= message.text %>
+                            <div class="text-gray-900 ml-0 mr-12 py-1 px-2 text-sm whitespace-pre-wrap">
+                              <%= raw(message.text) %>
                             </div>
                           </div>
                         </div>

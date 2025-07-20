@@ -2,6 +2,13 @@
 @import "tailwindcss/components";
 @import "tailwindcss/utilities";
 
+mark {
+  color: inherit;
+  background-color: #fff59d;
+  line-height: inherit;
+  display: inline;
+}
+
 .typing {
   width: 3.5rem;
   height: 1.75rem;

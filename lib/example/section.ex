@@ -43,7 +43,7 @@ defmodule Example.Section do
       bm.score,
       bm.section_id,
       s.page,
-      bm.content as text,
+      bm.highlighted_content as text,
       s.document_id
     FROM search_sections($1) bm
     INNER JOIN section_stats d ON d.section_id = bm.section_id

@@ -17,7 +17,7 @@ defmodule Example.Repo.Migrations.AddSectionStats do
     execute """
     ALTER TEXT SEARCH CONFIGURATION simple_conf
     ALTER MAPPING FOR asciiword, word, numword, asciihword, hword, numhword
-    WITH simple_dict, english_stem;
+    WITH english_stem, simple_dict;
     """
 
     execute """
@@ -239,7 +239,7 @@ defmodule Example.Repo.Migrations.AddSectionStats do
     ) RETURNS TABLE (
         section_id BIGINT,
         score FLOAT,
-        content TEXT
+        highlighted_content TEXT
     ) AS $$
     DECLARE
         v_total_docs INTEGER;
@@ -265,6 +265,11 @@ defmodule Example.Repo.Migrations.AddSectionStats do
                 LIMIT 1
             ) AS best_match
         ),
+        -- Create a tsquery object for highlighting
+        search_query AS (
+            SELECT to_tsquery('simple', string_agg(term, ' | ')) as q
+            FROM query_terms
+        ),
         term_scores AS (
             SELECT
                 d.section_id,
@@ -289,7 +294,13 @@ defmodule Example.Repo.Migrations.AddSectionStats do
         SELECT
             ts.section_id,
             SUM(ts.term_score) AS score,
-            ts.doc_text AS content
+            -- Use ts_headline to generate the highlighted content
+            ts_headline(
+                'public.simple_conf',
+                ts.doc_text,
+                (SELECT q FROM search_query),
+                'StartSel=<mark>, StopSel=</mark>, MaxFragments=10, MinWords=5, MaxWords=10'
+            ) AS highlighted_content
         FROM
             term_scores ts
         GROUP BY
