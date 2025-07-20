@@ -42,18 +42,17 @@ defmodule Example.Section do
     SELECT
       bm.score,
       bm.section_id,
-      s.page,
       bm.highlighted_content as text,
+      s.page,
       s.document_id
     FROM search_sections($1) bm
-    INNER JOIN section_stats d ON d.section_id = bm.section_id
     INNER JOIN sections s ON s.id = bm.section_id
     ORDER BY bm.score DESC;
     """
 
     case Ecto.Adapters.SQL.query(Example.Repo, sql, [term]) do
       {:ok, %{rows: rows}} ->
-        Enum.map(rows, fn [score, section_id, page, text, document_id] ->
+        Enum.map(rows, fn [score, section_id, text, page, document_id] ->
           {score, {section_id, page, text, document_id}}
         end)
 
@@ -71,7 +70,7 @@ defmodule Example.Section do
 
   def reindex_sections() do
     sql = """
-    SELECT FROM bulk_update_modified_sections()
+    SELECT FROM update_modified_sections()
     """
     Ecto.Adapters.SQL.query(Example.Repo, sql, [])
   end

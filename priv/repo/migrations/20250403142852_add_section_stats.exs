@@ -239,8 +239,7 @@ defmodule Example.Repo.Migrations.AddSectionStats do
     ) RETURNS TABLE (
         section_id BIGINT,
         score FLOAT,
-        highlighted_content TEXT,
-        content TEXT
+        highlighted_content TEXT
     ) AS $$
     DECLARE
         v_total_docs INTEGER;
@@ -299,8 +298,7 @@ defmodule Example.Repo.Migrations.AddSectionStats do
                 ts.doc_text,
                 (SELECT q FROM search_query),
                 'StartSel=<mark>, StopSel=</mark>, MaxFragments=10, MinWords=5, MaxWords=10'
-            ) AS highlighted_content,
-            ts.doc_text AS content
+            ) AS highlighted_content
         FROM
             term_scores ts
         GROUP BY
@@ -346,7 +344,7 @@ defmodule Example.Repo.Migrations.AddSectionStats do
     """
 
     execute """
-    CREATE OR REPLACE FUNCTION bulk_update_modified_sections()
+    CREATE OR REPLACE FUNCTION update_modified_sections()
     RETURNS INTEGER AS $$
     DECLARE
         updated_count INTEGER := 0;
